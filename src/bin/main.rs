@@ -12,7 +12,7 @@ fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:8080")?;
     listener.set_nonblocking(true)?;
     let mut server = Server::new(5);
-    server.start_input();
+    let thread = server.start_input();
 
     let mut file = OpenOptions::new()
         .write(true)
@@ -51,6 +51,7 @@ fn main() -> std::io::Result<()> {
     //         Err(e) => panic!("Error: {}", e),
     //     }
     // }
+    thread.join().unwrap();
     Ok(())
 }
 

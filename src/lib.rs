@@ -12,8 +12,8 @@ impl Server {
         Server { threadpool }
     }
 
-    pub fn start_input(&'static mut self) {
-        self.threadpool.pass_to_input();
+    pub fn start_input(&self) -> std::thread::JoinHandle<()> {
+        return self.threadpool.input();
     }
 
     pub fn execute<F>(&mut self, f: F)

@@ -1,9 +1,11 @@
 /* See LICENSE for license details */
+use std::io;
+use std::io::Write;
 use std::sync::{atomic, atomic::Ordering, mpsc, Arc, Mutex};
+use std::time::Duration;
 use std::{thread, time};
 
 mod error_handler;
-mod input_parser;
 
 use error_handler::ErrorType;
 
@@ -36,8 +38,6 @@ pub struct ThreadPool {
     sender: mpsc::Sender<Message>,
     is_dead: atomic::AtomicBool,
     error: error_handler::ErrorHandler,
-    #[allow(dead_code)]
-    input: input_parser::InputParser,
     err_thread: Option<thread::JoinHandle<()>>,
     err_recv: Arc<Mutex<mpsc::Receiver<ErrorType>>>,
 }
@@ -51,7 +51,6 @@ impl ThreadPool {
         let error = error_handler::ErrorHandler::new(num);
         let err_recv = error.get_err_recv();
         let err_thread = Option::Some(error.close_checker());
-        let input = input_parser::InputParser::new();
 
         for id in 0..num {
             workers.push(Worker::new(
@@ -66,7 +65,6 @@ impl ThreadPool {
             sender,
             is_dead,
             error,
-            input,
             err_thread,
             err_recv,
         }
@@ -121,12 +119,41 @@ impl ThreadPool {
         }
     }
 
-    pub fn pass_to_input(&'static mut self) {
-        self.input.start_input(
-            Arc::clone(&self.err_recv),
-            self.error.get_comms_sender(),
-            &self.is_dead,
-        );
+    pub fn input(&self) -> thread::JoinHandle<()> {
+        let err_recv = Arc::clone(&self.err_recv);
+        let comms_sender = self.error.get_comms_sender();
+        let refer = &self.is_dead;
+        let thread = thread::Builder::new()
+            .name("input_parser".to_string())
+            .spawn(move || loop {
+                let msg = err_recv
+                    .lock()
+                    .unwrap()
+                    .try_recv()
+                    .unwrap_or_else(|_| ErrorType::Nothing(String::from("Nothing")));
+                match msg {
+                    ErrorType::Fatal(_) => {
+                        println!("Server has died. Quitting");
+                        break;
+                    }
+                    _ => {}
+                };
+                print!("> ");
+                io::stdout().flush().unwrap();
+                let mut user_input = String::new();
+                io::stdin().read_line(&mut user_input).unwrap();
+                if user_input.trim() == "exit" {
+                    println!("Server closing");
+                    comms_sender
+                        .send(ErrorType::Fatal(String::from("User asked to quit")))
+                        .unwrap();
+                    refer.store(true, Ordering::Relaxed);
+                }
+                thread::sleep(Duration::from_millis(500));
+            })
+            .unwrap();
+
+        return thread;
     }
 
     pub fn is_dead(&self) -> bool {
