@@ -36,7 +36,7 @@ struct Worker {
 pub struct ThreadPool {
     workers: Vec<Worker>,
     sender: mpsc::Sender<Message>,
-    is_dead: atomic::AtomicBool,
+    is_dead: Arc<Mutex<atomic::AtomicBool>>,
     error: error_handler::ErrorHandler,
     err_thread: Option<thread::JoinHandle<()>>,
     err_recv: Arc<Mutex<mpsc::Receiver<ErrorType>>>,
@@ -45,7 +45,7 @@ pub struct ThreadPool {
 impl ThreadPool {
     pub fn new(num: usize) -> ThreadPool {
         let mut workers = Vec::new();
-        let is_dead = atomic::AtomicBool::new(false);
+        let is_dead = Arc::new(Mutex::new(atomic::AtomicBool::new(false)));
         let (sender, receiver) = mpsc::channel();
         let receiver = Arc::new(Mutex::new(receiver));
         let error = error_handler::ErrorHandler::new(num);
@@ -74,7 +74,7 @@ impl ThreadPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        if self.is_dead.load(Ordering::Relaxed) {
+        if self.is_dead.lock().unwrap().load(Ordering::Relaxed) {
             println!("Cannot execute");
             return;
         } else {
@@ -84,13 +84,13 @@ impl ThreadPool {
                 .unwrap_or_else(|err| {
                     self.error
                         .send(ErrorType::Fatal(String::from(format!("{:?}", err))));
-                    self.is_dead.store(true, Ordering::Relaxed);
+                    self.is_dead.lock().unwrap().store(true, Ordering::Relaxed);
                 });
         }
     }
 
     pub fn kill(&mut self) -> usize {
-        if self.is_dead.load(Ordering::Relaxed) {
+        if self.is_dead.lock().unwrap().load(Ordering::Relaxed) {
             return 1;
         } else {
             let mut broken = false;
@@ -105,7 +105,7 @@ impl ThreadPool {
             }
 
             if broken {
-                self.is_dead.store(true, Ordering::Relaxed);
+                self.is_dead.lock().unwrap().store(true, Ordering::Relaxed);
                 return 1;
             }
 
@@ -114,7 +114,7 @@ impl ThreadPool {
                     thread.join().unwrap();
                 }
             }
-            self.is_dead.store(true, Ordering::Relaxed);
+            self.is_dead.lock().unwrap().store(true, Ordering::Relaxed);
             return 0;
         }
     }
@@ -122,7 +122,7 @@ impl ThreadPool {
     pub fn input(&self) -> thread::JoinHandle<()> {
         let err_recv = Arc::clone(&self.err_recv);
         let comms_sender = self.error.get_comms_sender();
-        let refer = &self.is_dead;
+        let refer = Arc::clone(&self.is_dead);
         let thread = thread::Builder::new()
             .name("input_parser".to_string())
             .spawn(move || loop {
@@ -147,7 +147,7 @@ impl ThreadPool {
                     comms_sender
                         .send(ErrorType::Fatal(String::from("User asked to quit")))
                         .unwrap();
-                    refer.store(true, Ordering::Relaxed);
+                    refer.lock().unwrap().store(true, Ordering::Relaxed);
                 }
                 thread::sleep(Duration::from_millis(500));
             })
@@ -157,7 +157,7 @@ impl ThreadPool {
     }
 
     pub fn is_dead(&self) -> bool {
-        return self.is_dead.load(Ordering::Relaxed);
+        return self.is_dead.lock().unwrap().load(Ordering::Relaxed);
     }
 }
 
