@@ -12,6 +12,7 @@ fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:8080")?;
     listener.set_nonblocking(true)?;
     let mut server = Server::new(5);
+    server.start_input();
 
     let mut file = OpenOptions::new()
         .write(true)
@@ -23,13 +24,16 @@ fn main() -> std::io::Result<()> {
             println!("Quitting!");
             break;
         }
-        if let Ok((stream, socket)) = listener.accept() {
-            server.execute(|| {
-                handle_connection(stream);
-            });
-            let time = SystemTime::now();
-            file.write_all(format!("{:?} at {:?}\n", socket, time).as_bytes())?;
-        }
+        match listener.accept() {
+            Ok((stream, addr)) => {
+                server.execute(|| {
+                    handle_connection(stream);
+                });
+                let time = SystemTime::now();
+                file.write_all(format!("{:?} at {:?}\n", addr, time).as_bytes())?;
+            }
+            _ => {}
+        };
         thread::sleep(Duration::from_millis(500));
     }
     // for stream in listener.incoming() {

@@ -1,5 +1,5 @@
 /* See LICENSE for license details */
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{atomic, atomic::Ordering, mpsc, Arc, Mutex};
 use std::{thread, time};
 
 mod error_handler;
@@ -34,23 +34,24 @@ struct Worker {
 pub struct ThreadPool {
     workers: Vec<Worker>,
     sender: mpsc::Sender<Message>,
-    is_dead: bool,
+    is_dead: atomic::AtomicBool,
     error: error_handler::ErrorHandler,
     #[allow(dead_code)]
     input: input_parser::InputParser,
     err_thread: Option<thread::JoinHandle<()>>,
+    err_recv: Arc<Mutex<mpsc::Receiver<ErrorType>>>,
 }
 
 impl ThreadPool {
     pub fn new(num: usize) -> ThreadPool {
         let mut workers = Vec::new();
-        let is_dead = false;
+        let is_dead = atomic::AtomicBool::new(false);
         let (sender, receiver) = mpsc::channel();
         let receiver = Arc::new(Mutex::new(receiver));
         let error = error_handler::ErrorHandler::new(num);
         let err_recv = error.get_err_recv();
         let err_thread = Option::Some(error.close_checker());
-        let input = input_parser::InputParser::new(Arc::clone(&err_recv), error.get_comms_sender());
+        let input = input_parser::InputParser::new();
 
         for id in 0..num {
             workers.push(Worker::new(
@@ -67,6 +68,7 @@ impl ThreadPool {
             error,
             input,
             err_thread,
+            err_recv,
         }
     }
 
@@ -74,7 +76,7 @@ impl ThreadPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        if self.is_dead {
+        if self.is_dead.load(Ordering::Relaxed) {
             println!("Cannot execute");
             return;
         } else {
@@ -84,13 +86,13 @@ impl ThreadPool {
                 .unwrap_or_else(|err| {
                     self.error
                         .send(ErrorType::Fatal(String::from(format!("{:?}", err))));
-                    self.is_dead = true;
+                    self.is_dead.store(true, Ordering::Relaxed);
                 });
         }
     }
 
     pub fn kill(&mut self) -> usize {
-        if self.is_dead {
+        if self.is_dead.load(Ordering::Relaxed) {
             return 1;
         } else {
             let mut broken = false;
@@ -105,7 +107,7 @@ impl ThreadPool {
             }
 
             if broken {
-                self.is_dead = true;
+                self.is_dead.store(true, Ordering::Relaxed);
                 return 1;
             }
 
@@ -114,13 +116,21 @@ impl ThreadPool {
                     thread.join().unwrap();
                 }
             }
-            self.is_dead = true;
+            self.is_dead.store(true, Ordering::Relaxed);
             return 0;
         }
     }
 
+    pub fn pass_to_input(&'static mut self) {
+        self.input.start_input(
+            Arc::clone(&self.err_recv),
+            self.error.get_comms_sender(),
+            &self.is_dead,
+        );
+    }
+
     pub fn is_dead(&self) -> bool {
-        return self.is_dead;
+        return self.is_dead.load(Ordering::Relaxed);
     }
 }
 

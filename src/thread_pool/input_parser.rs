@@ -1,6 +1,6 @@
 /* See LICENSE for license details */
 use std::io::{self, Write};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{atomic, atomic::Ordering, mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -11,10 +11,17 @@ pub struct InputParser {
 }
 
 impl InputParser {
-    pub fn new(
+    pub fn new() -> InputParser {
+        let thread = Option::Some(thread::spawn(|| {}));
+        InputParser { thread }
+    }
+
+    pub fn start_input(
+        &'static mut self,
         err_recv: Arc<Mutex<mpsc::Receiver<ErrorType>>>,
         comms_sender: mpsc::Sender<ErrorType>,
-    ) -> InputParser {
+        is_dead: &'static atomic::AtomicBool,
+    ) {
         let thread = Option::Some(
             thread::Builder::new()
                 .name("input_parser".to_string())
@@ -40,13 +47,13 @@ impl InputParser {
                         comms_sender
                             .send(ErrorType::Fatal(String::from("User asked to quit")))
                             .unwrap();
+                        is_dead.store(true, Ordering::Relaxed);
                     }
                     thread::sleep(Duration::from_millis(500));
                 })
                 .unwrap(),
         );
-
-        InputParser { thread }
+        self.thread = thread;
     }
 }
 

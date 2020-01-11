@@ -12,6 +12,10 @@ impl Server {
         Server { threadpool }
     }
 
+    pub fn start_input(&'static mut self) {
+        self.threadpool.pass_to_input();
+    }
+
     pub fn execute<F>(&mut self, f: F)
     where
         F: FnOnce() + Send + 'static,
