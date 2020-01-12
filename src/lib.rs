@@ -1,21 +1,28 @@
 /* See LICENSE for license details */
+use std::convert::TryInto;
 use std::fs::{self, OpenOptions};
 use std::io::prelude::*;
 use std::net::{TcpListener, TcpStream};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
+extern crate chrono;
+use chrono::prelude::*;
 
 mod thread_pool;
 
 pub struct Server {
     threadpool: thread_pool::ThreadPool,
+    workers: usize,
 }
 
 impl Server {
     pub fn new(num: usize) -> Server {
         assert!(num > 0);
         let threadpool = thread_pool::ThreadPool::new(num);
-        Server { threadpool }
+        Server {
+            threadpool,
+            workers: num,
+        }
     }
 
     pub fn execute<F>(&mut self, f: F)
@@ -43,6 +50,9 @@ impl Server {
             .spawn(move || loop {
                 if self.is_dead() {
                     println!("Quitting!");
+                    thread::sleep(Duration::from_millis(
+                        (self.workers * 200).try_into().unwrap(),
+                    ));
                     break;
                 }
                 match listener.accept() {
@@ -50,13 +60,19 @@ impl Server {
                         self.execute(|| {
                             handle_connection(stream);
                         });
-                        let time = SystemTime::now();
-                        file.write_all(format!("{:?} at {:?}\n", addr, time).as_bytes())
-                            .unwrap();
+                        let time: DateTime<Local> = Local::now();
+                        file.write_all(
+                            format!("{:?} at {}\n", addr, time).as_bytes(),
+                        )
+                        .unwrap();
                     }
-                    _ => {}
+                    Err(ref e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
+                        thread::sleep(Duration::from_millis(500));
+                    }
+                    Err(e) => panic!("Err: {}", e),
                 };
-                thread::sleep(Duration::from_millis(500));
             })
             .unwrap();
         return thread;

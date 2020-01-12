@@ -51,7 +51,7 @@ impl ThreadPool {
         let err_recv = error.get_err_recv();
         let err_thread = Option::Some(error.close_checker());
         let input_thread = Option::Some(ThreadPool::input(
-            Arc::clone(&err_recv),
+            error.get_input_recv(),
             error.get_comms_sender(),
             Arc::clone(&is_dead),
         ));
@@ -87,8 +87,10 @@ impl ThreadPool {
             self.sender
                 .send(Message::NewMessage(job))
                 .unwrap_or_else(|err| {
-                    self.error
-                        .send(ErrorType::Fatal(String::from(format!("{:?}", err))));
+                    self.error.send(ErrorType::Fatal(String::from(format!(
+                        "{:?}",
+                        err
+                    ))));
                     self.is_dead.store(true, Ordering::Relaxed);
                 });
         }
@@ -120,14 +122,13 @@ impl ThreadPool {
         let thread = thread::Builder::new()
             .name("input_parser".to_string())
             .spawn(move || loop {
-                let msg = err_recv
-                    .lock()
-                    .unwrap()
-                    .try_recv()
-                    .unwrap_or_else(|_| ErrorType::Nothing(String::from("Nothing")));
+                let msg =
+                    err_recv.lock().unwrap().try_recv().unwrap_or_else(|_| {
+                        ErrorType::Nothing(String::from("Nothing"))
+                    });
                 match msg {
                     ErrorType::Fatal(_) => {
-                        println!("Server has died. Quitting");
+                        println!("Server has died. Closing input thread");
                         break;
                     }
                     _ => {}
@@ -139,7 +140,9 @@ impl ThreadPool {
                 if user_input.trim() == "exit" {
                     println!("Server closing");
                     comms_sender
-                        .send(ErrorType::Fatal(String::from("User asked to quit")))
+                        .send(ErrorType::Fatal(String::from(
+                            "User asked to quit",
+                        )))
                         .unwrap();
                     refer.store(true, Ordering::Relaxed);
                 }
@@ -180,11 +183,10 @@ impl Worker {
         let thread = thread::Builder::new()
             .name(String::from(format!("worker_{}", id)))
             .spawn(move || loop {
-                let msg = recv
-                    .lock()
-                    .unwrap()
-                    .try_recv()
-                    .unwrap_or_else(|_| Message::Nothing(String::from("Nothing")));
+                let msg =
+                    recv.lock().unwrap().try_recv().unwrap_or_else(|_| {
+                        Message::Nothing(String::from("Nothing"))
+                    });
                 match msg {
                     Message::NewMessage(job) => {
                         println!("Worker {} got a job, executing", id);
@@ -196,11 +198,10 @@ impl Worker {
                     }
                     _ => {}
                 }
-                let err = err_recv
-                    .lock()
-                    .unwrap()
-                    .try_recv()
-                    .unwrap_or_else(|_| ErrorType::Nothing(String::from("Nothing")));
+                let err =
+                    err_recv.lock().unwrap().try_recv().unwrap_or_else(|_| {
+                        ErrorType::Nothing(String::from("Nothing"))
+                    });
                 if let ErrorType::Fatal(_) = err {
                     println!("Worker {} shutting down", id);
                     break;

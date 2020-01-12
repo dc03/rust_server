@@ -3,7 +3,10 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
+
+extern crate chrono;
+use chrono::prelude::*;
 
 pub enum ErrorType {
     NonFatal(String),
@@ -17,6 +20,8 @@ pub struct ErrorHandler {
     num: usize,
     comms_recv: Arc<Mutex<mpsc::Receiver<ErrorType>>>,
     comms_sender: mpsc::Sender<ErrorType>,
+    input_recv: Arc<Mutex<mpsc::Receiver<ErrorType>>>,
+    input_sender: mpsc::Sender<ErrorType>,
 }
 
 impl ErrorHandler {
@@ -25,20 +30,25 @@ impl ErrorHandler {
         let err_receiver = Arc::new(Mutex::new(err_receiver));
         let (comms_sender, comms_recv) = mpsc::channel();
         let comms_recv = Arc::new(Mutex::new(comms_recv));
+        let (input_sender, input_recv) = mpsc::channel();
+        let input_recv = Arc::new(Mutex::new(input_recv));
         ErrorHandler {
             err_sender,
             err_receiver,
             num,
             comms_recv,
             comms_sender,
+            input_recv,
+            input_sender,
         }
     }
 
     pub fn send(&self, err: ErrorType) {
         match err {
             ErrorType::NonFatal(err_non_fatal) => {
-                let time = SystemTime::now();
-                let err_non_fatal = format!("ERROR::NON_FATAL: {} at {:?}", err_non_fatal, time);
+                let time: DateTime<Local> = Local::now();
+                let err_non_fatal =
+                    format!("ERROR::NON_FATAL: {} at {}", err_non_fatal, time);
                 println!("{}", err_non_fatal);
                 let mut file = OpenOptions::new()
                     .write(true)
@@ -50,8 +60,9 @@ impl ErrorHandler {
                 file.write_all(err_non_fatal.as_bytes()).unwrap();
             }
             ErrorType::Fatal(err_fatal) => {
-                let time = SystemTime::now();
-                let err_fatal = format!("ERROR::FATAL: {} at {:?}", err_fatal, time);
+                let time: DateTime<Local> = Local::now();
+                let err_fatal =
+                    format!("ERROR::FATAL: {} at {}", err_fatal, time);
                 println!("{}", err_fatal);
                 let mut file = OpenOptions::new()
                     .write(true)
@@ -73,28 +84,36 @@ impl ErrorHandler {
         let num = self.num;
         let comms_recv = Arc::clone(&self.comms_recv);
         let err_recv = Arc::clone(&self.err_receiver);
+        let input_sender = mpsc::Sender::clone(&self.input_sender);
         let thread = thread::Builder::new()
             .name("error_handler".to_string())
             .spawn(move || loop {
-                let msg = comms_recv
-                    .lock()
-                    .unwrap()
-                    .try_recv()
-                    .unwrap_or_else(|_| ErrorType::Nothing(String::from("Nothing")));
+                let msg = comms_recv.lock().unwrap().try_recv().unwrap_or_else(
+                    |_| ErrorType::Nothing(String::from("Nothing")),
+                );
                 if let ErrorType::Fatal(err) = msg {
-                    for _ in 0..=num {
-                        sender.send(ErrorType::Fatal(String::from(&err))).unwrap();
+                    input_sender
+                        .send(ErrorType::Fatal(String::from(&err)))
+                        .unwrap();
+                    for _ in 0..num {
+                        sender
+                            .send(ErrorType::Fatal(String::from(&err)))
+                            .unwrap();
                     }
                     break;
                 }
-                let err = err_recv
-                    .lock()
-                    .unwrap()
-                    .try_recv()
-                    .unwrap_or_else(|_| ErrorType::Nothing(String::from("Nothing")));
+                let err =
+                    err_recv.lock().unwrap().try_recv().unwrap_or_else(|_| {
+                        ErrorType::Nothing(String::from("Nothing"))
+                    });
                 if let ErrorType::Fatal(some) = err {
-                    for _ in 0..=num {
-                        sender.send(ErrorType::Fatal(String::from(&some))).unwrap();
+                    input_sender
+                        .send(ErrorType::Fatal(String::from(&some)))
+                        .unwrap();
+                    for _ in 0..num {
+                        sender
+                            .send(ErrorType::Fatal(String::from(&some)))
+                            .unwrap();
                     }
                     break;
                 }
@@ -108,12 +127,11 @@ impl ErrorHandler {
         return Arc::clone(&self.err_receiver);
     }
 
-    #[allow(dead_code)]
-    pub fn get_err_sender(&self) -> mpsc::Sender<ErrorType> {
-        return mpsc::Sender::clone(&self.err_sender);
-    }
-
     pub fn get_comms_sender(&self) -> mpsc::Sender<ErrorType> {
         return mpsc::Sender::clone(&self.comms_sender);
+    }
+
+    pub fn get_input_recv(&self) -> Arc<Mutex<mpsc::Receiver<ErrorType>>> {
+        return Arc::clone(&self.input_recv);
     }
 }
