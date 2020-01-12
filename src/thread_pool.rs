@@ -1,9 +1,7 @@
 /* See LICENSE for license details */
-use std::io;
-use std::io::Write;
+use std::io::{self, Write};
 use std::sync::{atomic, atomic::Ordering, mpsc, Arc, Mutex};
-use std::time::Duration;
-use std::{thread, time};
+use std::{thread, time, time::Duration};
 
 mod error_handler;
 
@@ -36,21 +34,27 @@ struct Worker {
 pub struct ThreadPool {
     workers: Vec<Worker>,
     sender: mpsc::Sender<Message>,
-    is_dead: Arc<Mutex<atomic::AtomicBool>>,
+    is_dead: Arc<atomic::AtomicBool>,
     error: error_handler::ErrorHandler,
     err_thread: Option<thread::JoinHandle<()>>,
-    err_recv: Arc<Mutex<mpsc::Receiver<ErrorType>>>,
+    _err_recv: Arc<Mutex<mpsc::Receiver<ErrorType>>>,
+    input_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl ThreadPool {
     pub fn new(num: usize) -> ThreadPool {
         let mut workers = Vec::new();
-        let is_dead = Arc::new(Mutex::new(atomic::AtomicBool::new(false)));
+        let is_dead = Arc::new(atomic::AtomicBool::new(false));
         let (sender, receiver) = mpsc::channel();
         let receiver = Arc::new(Mutex::new(receiver));
         let error = error_handler::ErrorHandler::new(num);
         let err_recv = error.get_err_recv();
         let err_thread = Option::Some(error.close_checker());
+        let input_thread = Option::Some(ThreadPool::input(
+            Arc::clone(&err_recv),
+            error.get_comms_sender(),
+            Arc::clone(&is_dead),
+        ));
 
         for id in 0..num {
             workers.push(Worker::new(
@@ -66,7 +70,8 @@ impl ThreadPool {
             is_dead,
             error,
             err_thread,
-            err_recv,
+            _err_recv: err_recv,
+            input_thread,
         }
     }
 
@@ -74,7 +79,7 @@ impl ThreadPool {
     where
         F: FnOnce() + Send + 'static,
     {
-        if self.is_dead.lock().unwrap().load(Ordering::Relaxed) {
+        if self.is_dead.load(Ordering::Relaxed) {
             println!("Cannot execute");
             return;
         } else {
@@ -84,45 +89,34 @@ impl ThreadPool {
                 .unwrap_or_else(|err| {
                     self.error
                         .send(ErrorType::Fatal(String::from(format!("{:?}", err))));
-                    self.is_dead.lock().unwrap().store(true, Ordering::Relaxed);
+                    self.is_dead.store(true, Ordering::Relaxed);
                 });
         }
     }
 
     pub fn kill(&mut self) -> usize {
-        if self.is_dead.lock().unwrap().load(Ordering::Relaxed) {
+        if self.is_dead.load(Ordering::Relaxed) {
             return 1;
         } else {
-            let mut broken = false;
             println!("Killing the workers");
             for _ in &mut self.workers {
-                self.sender.send(Message::Terminate).unwrap_or_else(|_| {
-                    broken = true;
-                });
-                if broken {
-                    break;
-                }
+                self.sender.send(Message::Terminate).ok();
             }
-
-            if broken {
-                self.is_dead.lock().unwrap().store(true, Ordering::Relaxed);
-                return 1;
-            }
-
             for worker in &mut self.workers {
                 if let Some(thread) = worker.thread.take() {
                     thread.join().unwrap();
                 }
             }
-            self.is_dead.lock().unwrap().store(true, Ordering::Relaxed);
+            self.is_dead.store(true, Ordering::Relaxed);
             return 0;
         }
     }
 
-    pub fn input(&self) -> thread::JoinHandle<()> {
-        let err_recv = Arc::clone(&self.err_recv);
-        let comms_sender = self.error.get_comms_sender();
-        let refer = Arc::clone(&self.is_dead);
+    pub fn input(
+        err_recv: Arc<Mutex<mpsc::Receiver<ErrorType>>>,
+        comms_sender: mpsc::Sender<ErrorType>,
+        refer: Arc<atomic::AtomicBool>,
+    ) -> thread::JoinHandle<()> {
         let thread = thread::Builder::new()
             .name("input_parser".to_string())
             .spawn(move || loop {
@@ -147,7 +141,7 @@ impl ThreadPool {
                     comms_sender
                         .send(ErrorType::Fatal(String::from("User asked to quit")))
                         .unwrap();
-                    refer.lock().unwrap().store(true, Ordering::Relaxed);
+                    refer.store(true, Ordering::Relaxed);
                 }
                 thread::sleep(Duration::from_millis(500));
             })
@@ -157,7 +151,7 @@ impl ThreadPool {
     }
 
     pub fn is_dead(&self) -> bool {
-        return self.is_dead.lock().unwrap().load(Ordering::Relaxed);
+        return self.is_dead.load(Ordering::Relaxed);
     }
 }
 
@@ -165,6 +159,11 @@ impl Drop for ThreadPool {
     fn drop(&mut self) {
         self.kill();
         if let Some(thread) = self.err_thread.take() {
+            thread.join().unwrap_or_else(|err| {
+                println!("Err: while quitting {:?}", err);
+            });
+        }
+        if let Some(thread) = self.input_thread.take() {
             thread.join().unwrap_or_else(|err| {
                 println!("Err: while quitting {:?}", err);
             });
