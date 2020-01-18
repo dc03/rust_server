@@ -1,4 +1,5 @@
 /* See LICENSE for license details */
+use std::env;
 use std::io::{self, Write};
 use std::sync::{atomic, atomic::Ordering, mpsc, Arc, Mutex};
 use std::{thread, time, time::Duration};
@@ -38,7 +39,6 @@ pub struct ThreadPool {
     error: error_handler::ErrorHandler,
     err_thread: Option<thread::JoinHandle<()>>,
     _err_recv: Arc<Mutex<mpsc::Receiver<ErrorType>>>,
-    input_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl ThreadPool {
@@ -50,12 +50,6 @@ impl ThreadPool {
         let error = error_handler::ErrorHandler::new(num);
         let err_recv = error.get_err_recv();
         let err_thread = Option::Some(error.close_checker());
-        let input_thread = Option::Some(ThreadPool::input(
-            error.get_input_recv(),
-            error.get_comms_sender(),
-            Arc::clone(&is_dead),
-        ));
-
         for id in 0..num {
             workers.push(Worker::new(
                 id,
@@ -71,11 +65,10 @@ impl ThreadPool {
             error,
             err_thread,
             _err_recv: err_recv,
-            input_thread,
         }
     }
 
-    pub fn execute<F>(&mut self, f: F)
+    pub fn execute<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
     {
@@ -114,14 +107,17 @@ impl ThreadPool {
         }
     }
 
-    pub fn input(
-        err_recv: Arc<Mutex<mpsc::Receiver<ErrorType>>>,
-        comms_sender: mpsc::Sender<ErrorType>,
-        refer: Arc<atomic::AtomicBool>,
-    ) -> thread::JoinHandle<()> {
+    pub fn input(&mut self) -> thread::JoinHandle<()> {
+        let err_recv = Arc::clone(&self._err_recv);
+        let comms_sender = self.error.get_comms_sender();
+        let refer = Arc::clone(&self.is_dead);
         let thread = thread::Builder::new()
             .name("input_parser".to_string())
             .spawn(move || loop {
+                if refer.load(Ordering::Relaxed) {
+                    println!("Server has died. Closing input thread");
+                    break;
+                }
                 let msg =
                     err_recv.lock().unwrap().try_recv().unwrap_or_else(|_| {
                         ErrorType::Nothing(String::from("Nothing"))
@@ -166,11 +162,6 @@ impl Drop for ThreadPool {
                 println!("Err: while quitting {:?}", err);
             });
         }
-        if let Some(thread) = self.input_thread.take() {
-            thread.join().unwrap_or_else(|err| {
-                println!("Err: while quitting {:?}", err);
-            });
-        }
     }
 }
 
@@ -182,31 +173,36 @@ impl Worker {
     ) -> Worker {
         let thread = thread::Builder::new()
             .name(String::from(format!("worker_{}", id)))
-            .spawn(move || loop {
-                let msg =
-                    recv.lock().unwrap().try_recv().unwrap_or_else(|_| {
-                        Message::Nothing(String::from("Nothing"))
-                    });
-                match msg {
-                    Message::NewMessage(job) => {
-                        println!("Worker {} got a job, executing", id);
-                        job.call_box();
+            .spawn(move || {
+                let is_debug = env::var("debug").is_ok();
+                loop {
+                    let msg =
+                        recv.lock().unwrap().try_recv().unwrap_or_else(|_| {
+                            Message::Nothing(String::from("Nothing"))
+                        });
+                    match msg {
+                        Message::NewMessage(job) => {
+                            if is_debug {
+                                println!("Worker {} got a job, executing", id);
+                            }
+                            job.call_box();
+                        }
+                        Message::Terminate => {
+                            println!("Worker {} told to terminate", id);
+                            break;
+                        }
+                        _ => {}
                     }
-                    Message::Terminate => {
-                        println!("Worker {} told to terminate", id);
+                    let err =
+                        err_recv.lock().unwrap().try_recv().unwrap_or_else(
+                            |_| ErrorType::Nothing(String::from("Nothing")),
+                        );
+                    if let ErrorType::Fatal(_) = err {
+                        println!("Worker {} shutting down", id);
                         break;
                     }
-                    _ => {}
+                    thread::sleep(time::Duration::from_millis(500));
                 }
-                let err =
-                    err_recv.lock().unwrap().try_recv().unwrap_or_else(|_| {
-                        ErrorType::Nothing(String::from("Nothing"))
-                    });
-                if let ErrorType::Fatal(_) = err {
-                    println!("Worker {} shutting down", id);
-                    break;
-                }
-                thread::sleep(time::Duration::from_millis(500));
             })
             .unwrap();
 

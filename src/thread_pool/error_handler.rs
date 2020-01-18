@@ -9,6 +9,7 @@ extern crate chrono;
 use chrono::prelude::*;
 
 pub enum ErrorType {
+    #[allow(dead_code)]
     NonFatal(String),
     Fatal(String),
     Nothing(String),
@@ -20,6 +21,7 @@ pub struct ErrorHandler {
     num: usize,
     comms_recv: Arc<Mutex<mpsc::Receiver<ErrorType>>>,
     comms_sender: mpsc::Sender<ErrorType>,
+    #[allow(dead_code)]
     input_recv: Arc<Mutex<mpsc::Receiver<ErrorType>>>,
     input_sender: mpsc::Sender<ErrorType>,
 }
@@ -131,6 +133,7 @@ impl ErrorHandler {
         return mpsc::Sender::clone(&self.comms_sender);
     }
 
+    #[allow(dead_code)]
     pub fn get_input_recv(&self) -> Arc<Mutex<mpsc::Receiver<ErrorType>>> {
         return Arc::clone(&self.input_recv);
     }
