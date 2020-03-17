@@ -139,55 +139,30 @@ impl Parse {
 
         if buffer.starts_with(get) {
             let mut found = false;
-            for config in &self.configs {
-                if is_debug {
-                    println!("config.0: {}, config.1: {}", config.0, config.1);
-                }
-
-                if (config.0 == "GET") | (config.0 == "get") {
-                    let req = format!("GET {} HTTP/1.1", config.1);
-
-                    if is_debug {
-                        println!("req: {}", req);
-                    }
-
-                    if buffer.starts_with(req.as_bytes()) {
-                        if is_debug {
-                            println!("Matches with: {}", req);
-                        }
-
-                        let content_type = check_ext(&config.2);
-                        let status_line = format!(
-                            "HTTP/1.1 \r\nContent-Type: text/{}\r\n\r\n",
-                            content_type
-                        );
-                        let filename = String::from(&config.2);
-                        let contents = fs::read_to_string(filename).unwrap();
-                        let response = format!("{}{}", status_line, contents);
-
-                        if is_debug {
-                            println!("response: {}\n----------\n", response);
-                        }
-                        stream.write(response.as_bytes()).unwrap();
-                        found = true;
-                        break;
-                    }
-                }
+            let mut file_path = String::from(String::from_utf8(buffer.to_vec())
+                .unwrap().split(' ').collect::<Vec<&str>>()[1]);
+            let filename = if file_path == "/" {
+                "hello.html"
+            } else {
+                file_path.remove(0);
+                file_path.as_str()
+            };
+            if is_debug {
+                println!("file_name: {}", filename);
             }
-
-            if !found {
-                for config in &self.configs {
-                    if config.0 == "404" {
-                        let file_404 = fs::read_to_string(&config.2).unwrap();
-                        let response = format!(
-                            "HTTP/1.1 404 NOT FOUND\r\n\r\n{}",
-                            file_404
-                        );
-                        stream.write(response.as_bytes()).unwrap();
-                        break;
-                    }
-                }
+            let contents = fs::read_to_string(filename).unwrap_or_else(|_|{
+                fs::read_to_string("404.html").unwrap()
+            });
+            let content_type = check_ext(&String::from(filename));
+            let status_line = format!(
+                "HTTP/1.1 \r\nContent-Type: text/{}\r\n\r\n",
+                content_type
+            );
+            let response = format!("{}{}", status_line, contents);
+            if is_debug {
+                println!("response: \n{}\n----------\n", response);
             }
+            stream.write(response.as_bytes()).unwrap();
         } else if buffer.starts_with(post) {
         } else if buffer.starts_with(put) {
         }
@@ -213,6 +188,6 @@ fn check_ext(filename: &String) -> String {
     } else if filename.ends_with(".html") {
         "html".to_string()
     } else {
-        "none".to_string()
+        "html".to_string()
     }
 }

@@ -1,5 +1,13 @@
 body {
-    font-family: Roboto;
-    color: white;
+    font-family: Roboto, Consolas, Fira Code !important;
+    font-weight: 500;
+    color: grey;
     background-color: black;
+}
+
+a {
+    font-family: Sans Serif !important;
+    font-weight: bold;
+    color: white;
+    background-color: tomato;
 }
