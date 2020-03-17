@@ -15,20 +15,17 @@ pub struct Server {
     threadpool: thread_pool::ThreadPool,
     workers: usize,
     input_thread: Option<thread::JoinHandle<()>>,
-    parser: Parse,
 }
 
 impl Server {
-    pub fn new(num: usize, filename: &str) -> Server {
+    pub fn new(num: usize) -> Server {
         assert!(num > 0);
         let mut threadpool = thread_pool::ThreadPool::new(num);
         let input_thread = Option::Some(threadpool.input());
-        let parser = Parse::new(filename);
         Server {
             threadpool,
             workers: num,
             input_thread,
-            parser,
         }
     }
 
@@ -64,9 +61,8 @@ impl Server {
                 }
                 match listener.accept() {
                     Ok((stream, addr)) => {
-                        let refer = self.parser.make_new();
                         self.execute(move || {
-                            refer.handle(stream, is_debug);
+                            Parse::handle(stream, is_debug);
                         });
                         let time: DateTime<Local> = Local::now();
                         file.write_all(
@@ -95,34 +91,10 @@ impl Drop for Server {
     }
 }
 
-struct Parse {
-    configs: Vec<(String, String, String)>,
-}
+struct Parse {}
 
 impl Parse {
-    pub fn new(filename: &str) -> Parse {
-        let file = fs::read_to_string(filename).unwrap();
-        let mut configs = Vec::new();
-        for line in file.split("\n") {
-            let mut token_holder = Vec::new();
-            for token in line.split(" ") {
-                let mut token = String::from(token);
-                if token.contains("\r") | token.contains("\n") {
-                    token.pop();
-                }
-                token_holder.push(token);
-            }
-            configs.push((
-                String::from(&token_holder[0]),
-                String::from(&token_holder[1]),
-                String::from(&token_holder[2]),
-            ));
-        }
-
-        Parse { configs }
-    }
-
-    pub fn handle(&self, mut stream: TcpStream, is_debug: bool) {
+    pub fn handle(mut stream: TcpStream, is_debug: bool) {
         let mut buffer = [0; 512];
         stream.read(&mut buffer).unwrap();
 
@@ -138,7 +110,6 @@ impl Parse {
         let put = b"PUT";
 
         if buffer.starts_with(get) {
-            let mut found = false;
             let mut file_path = String::from(String::from_utf8(buffer.to_vec())
                 .unwrap().split(' ').collect::<Vec<&str>>()[1]);
             let filename = if file_path == "/" {
@@ -166,19 +137,6 @@ impl Parse {
         } else if buffer.starts_with(post) {
         } else if buffer.starts_with(put) {
         }
-    }
-
-    pub fn make_new(&self) -> Parse {
-        let mut configs = Vec::new();
-        for config in &self.configs {
-            let tuple = (
-                String::from(&config.0),
-                String::from(&config.1),
-                String::from(&config.2),
-            );
-            configs.push(tuple);
-        }
-        Parse { configs }
     }
 }
 
