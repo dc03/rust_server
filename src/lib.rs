@@ -1,8 +1,8 @@
 /* See LICENSE for license details */
 use std::convert::TryInto;
 use std::env;
-use std::fs::{self, OpenOptions};
-use std::io::prelude::*;
+use std::fs::{self, OpenOptions, File};
+use std::io::{prelude::*, BufReader};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::time::Duration;
@@ -40,7 +40,7 @@ impl Server {
         return self.threadpool.is_dead();
     }
 
-    pub fn start_at(self, addr: &str) -> thread::JoinHandle<()> {
+    pub fn start_at(self, addr: &str, config: &'static str) -> thread::JoinHandle<()> {
         let listener = TcpListener::bind(addr).unwrap();
         let is_debug = env::var("debug").is_ok();
         listener.set_nonblocking(true).unwrap();
@@ -50,9 +50,11 @@ impl Server {
             .append(true)
             .open("./ips.txt")
             .unwrap();
+    
         let thread = thread::Builder::new()
             .name("server_thread".to_string())
             .spawn(move || loop {
+                let parser = Parse::new(config);
                 if self.is_dead() {
                     thread::sleep(Duration::from_millis(
                         (self.workers * 200).try_into().unwrap(),
@@ -62,7 +64,7 @@ impl Server {
                 match listener.accept() {
                     Ok((stream, addr)) => {
                         self.execute(move || {
-                            Parse::handle(stream, is_debug);
+                            parser.handle(stream, is_debug);
                         });
                         let time: DateTime<Local> = Local::now();
                         file.write_all(
@@ -91,10 +93,33 @@ impl Drop for Server {
     }
 }
 
-struct Parse {}
+struct Parse {
+    index: String,
+    error_404: String
+}
 
 impl Parse {
-    pub fn handle(mut stream: TcpStream, is_debug: bool) {
+    pub fn new(filename: &str) -> Parse {
+        let config = File::open(filename).unwrap();
+        let mut index = String::new();
+        let mut error_404 = String::new();
+        for line in BufReader::new(config).lines() {
+            let line = line.unwrap();
+            if line.starts_with("index:") {
+                index = String::from(line)
+                    .split(' ').collect::<Vec<&str>>()[1].to_string();
+            } else if line.starts_with("404:") {
+                error_404 = String::from(line)
+                    .split(' ').collect::<Vec<&str>>()[1].to_string();
+            }
+        }
+        Parse {
+            index,
+            error_404
+        }
+    }
+
+    pub fn handle(&self, mut stream: TcpStream, is_debug: bool) {
         let mut buffer = [0; 512];
         stream.read(&mut buffer).unwrap();
 
@@ -113,7 +138,7 @@ impl Parse {
             let mut file_path = String::from(String::from_utf8(buffer.to_vec())
                 .unwrap().split(' ').collect::<Vec<&str>>()[1]);
             let filename = if file_path == "/" {
-                "hello.html"
+                self.index.as_str()
             } else {
                 file_path.remove(0);
                 file_path.as_str()
@@ -122,7 +147,7 @@ impl Parse {
                 println!("file_name: {}", filename);
             }
             let contents = fs::read_to_string(filename).unwrap_or_else(|_|{
-                fs::read_to_string("404.html").unwrap()
+                fs::read_to_string(self.error_404.as_str()).unwrap()
             });
             let content_type = check_ext(&String::from(filename));
             let status_line = format!(
