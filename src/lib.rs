@@ -7,12 +7,12 @@
 
 use std::convert::TryInto;
 use std::env;
-use std::fs::{self, OpenOptions, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{prelude::*, BufReader};
 use std::net::{TcpListener, TcpStream};
+use std::str::FromStr;
 use std::thread;
 use std::time::Duration;
-use std::str::FromStr;
 extern crate chrono;
 use chrono::prelude::*;
 
@@ -40,9 +40,7 @@ impl Server {
     /// # Panics
     ///
     /// If the number of workers is less than zero
-    pub fn new(
-        num: usize
-    ) -> Server {
+    pub fn new(num: usize) -> Server {
         assert!(num > 0);
         let mut threadpool = thread_pool::ThreadPool::new(num);
         // Option trick so that we can take the thread later to join it
@@ -57,9 +55,7 @@ impl Server {
     /// Executes a job passed to it through the workers the thread pool
     /// maintains. It is usually not needed to call this as `start_at()`
     /// handles this by itself
-    pub fn execute<F>(
-        &self, f: F
-    )
+    pub fn execute<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
     {
@@ -67,9 +63,7 @@ impl Server {
     }
 
     /// Returns the current state of the server
-    pub fn is_dead(
-        &self
-    ) -> bool {
+    pub fn is_dead(&self) -> bool {
         return self.threadpool.is_dead();
     }
 
@@ -92,13 +86,14 @@ impl Server {
     /// - If the ip logging file could not be opened or written to
     /// - If the thread could not be paused while shutting down (should not
     ///   happen)
-    /// - If the thread could not be created 
+    /// - If the thread could not be created
     pub fn start_at(
-        self, addr: &str, 
-        config: &'static str
+        self,
+        addr: &str,
+        config: &'static str,
     ) -> thread::JoinHandle<()> {
         let listener = TcpListener::bind(addr).unwrap();
-        // The environment variable 'debug' can be set to 1 for useful 
+        // The environment variable 'debug' can be set to 1 for useful
         // debugging purposes
         let is_debug = env::var("debug").is_ok();
         listener.set_nonblocking(true).unwrap();
@@ -192,11 +187,12 @@ impl Parse {
         for line in BufReader::new(config).lines() {
             let line = line.unwrap();
             if line.starts_with("index:") {
-                index = String::from(line)
-                    .split(' ').collect::<Vec<&str>>()[1].to_string();
+                index = String::from(line).split(' ').collect::<Vec<&str>>()[1]
+                    .to_string();
             } else if line.starts_with("404:") {
-                error_404 = String::from(line)
-                    .split(' ').collect::<Vec<&str>>()[1].to_string();
+                error_404 =
+                    String::from(line).split(' ').collect::<Vec<&str>>()[1]
+                        .to_string();
             // '#' is for comments
             } else if !line.starts_with("#") && line.len() > 0 {
                 println!("Garbage in config file: {}", line);
@@ -265,8 +261,12 @@ impl Parse {
         let put = b"PUT";
 
         if buffer.starts_with(get) {
-            let mut file_path = String::from(String::from_utf8(buffer.to_vec())
-                .unwrap().split(' ').collect::<Vec<&str>>()[1]);
+            let mut file_path = String::from(
+                String::from_utf8(buffer.to_vec())
+                    .unwrap()
+                    .split(' ')
+                    .collect::<Vec<&str>>()[1],
+            );
             // If the user provided no index file use our own
             let filename = if file_path == "/" {
                 if self.has_index {
@@ -276,7 +276,7 @@ impl Parse {
                 }
             // Otherwise just give them the file. There is no checking for
             // what file is being sent right now
-            }  else {                
+            } else {
                 file_path.remove(0);
                 file_path.as_str()
             };
@@ -290,19 +290,18 @@ impl Parse {
             if !self.has_index && file_path == "/" && !self.has_error {
                 contents =
                     "<!DOCTYPE html><html><body>No index file</body></html>"
-                    .to_string();
+                        .to_string();
                 response_type = "200 OK";
             } else {
                 response_type = "200 OK";
-                contents = fs::read_to_string(filename).unwrap_or_else(|_|{
+                contents = fs::read_to_string(filename).unwrap_or_else(|_| {
                     response_type = "404 NOT FOUND";
                     content_type = "text/html".to_string();
                     if self.has_error {
-                        fs::read_to_string(self.error_404.as_str())
-                        .unwrap()
+                        fs::read_to_string(self.error_404.as_str()).unwrap()
                     } else {
                         "<!DOCTYPE html><html><body>No 404 file</body></html>"
-                        .to_string()
+                            .to_string()
                     }
                 });
             };
