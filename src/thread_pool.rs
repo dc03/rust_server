@@ -42,6 +42,9 @@ pub struct ThreadPool {
 }
 
 impl ThreadPool {
+    /// Function to create and return a new threadpool based on the number on
+    /// the number of workers passed to it. The number of workers MUST be
+    /// greater than zero as there are no checks for that in this function
     pub fn new(num: usize) -> ThreadPool {
         let mut workers = Vec::new();
         let is_dead = Arc::new(atomic::AtomicBool::new(false));
@@ -68,10 +71,13 @@ impl ThreadPool {
         }
     }
 
+    /// Function to execute something using a threadpool. Accepts a closure
     pub fn execute<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
     {
+        // Cannot execute anything when the server has died / the threadpool
+        // has been shut off
         if self.is_dead.load(Ordering::Relaxed) {
             println!("Cannot execute");
             return;
@@ -89,6 +95,8 @@ impl ThreadPool {
         }
     }
 
+    /// Function to kill the threadpool (i.e shut it off). Modifies and checks
+    /// the is_dead variable to store the current state of the threadpool
     pub fn kill(&mut self) -> usize {
         if self.is_dead.load(Ordering::Relaxed) {
             return 1;
@@ -107,6 +115,12 @@ impl ThreadPool {
         }
     }
 
+    /// Function that returns the input thread that monitors user input. The
+    /// input thread has the ability to shut of all other threads via the
+    /// error handler that the thread pool uses.
+    ///
+    /// Sends the signal to shut off the server / threadpool with the command
+    /// `exit`
     pub fn input(&mut self) -> thread::JoinHandle<()> {
         let err_recv = Arc::clone(&self._err_recv);
         let comms_sender = self.error.get_comms_sender();
@@ -114,10 +128,15 @@ impl ThreadPool {
         let thread = thread::Builder::new()
             .name("input_parser".to_string())
             .spawn(move || loop {
+                // Check if the server has died before doing anything else.
+                // This avoids the user being able to keep repeatedly killing
+                // the server even if its already dead
                 if refer.load(Ordering::Relaxed) {
                     println!("Server has died. Closing input thread");
                     break;
                 }
+                // Use a dummy ErrorType::Nothing type to keep the return
+                // type of the receiver consistent
                 let msg =
                     err_recv.lock().unwrap().try_recv().unwrap_or_else(|_| {
                         ErrorType::Nothing(String::from("Nothing"))
@@ -130,16 +149,21 @@ impl ThreadPool {
                     _ => {}
                 };
                 print!("> ");
+                // Have to flush the output with print! as it doesn't
+                // immediately print otherwise. I wish this was easier to do
                 io::stdout().flush().unwrap();
                 let mut user_input = String::new();
                 io::stdin().read_line(&mut user_input).unwrap();
                 if user_input.trim() == "exit" {
+                    // Send the error listener the call to shut down the server
                     println!("Server closing");
                     comms_sender
                         .send(ErrorType::Fatal(String::from(
                             "User asked to quit",
                         )))
                         .unwrap();
+                    // 'refer' is the badly name reference to the boolean which
+                    // stores if the server is dead
                     refer.store(true, Ordering::Relaxed);
                 }
                 thread::sleep(Duration::from_millis(500));
@@ -149,6 +173,7 @@ impl ThreadPool {
         return thread;
     }
 
+    /// Accessor function to return if the threadpool has been shut off or not
     pub fn is_dead(&self) -> bool {
         return self.is_dead.load(Ordering::Relaxed);
     }
@@ -157,6 +182,7 @@ impl ThreadPool {
 impl Drop for ThreadPool {
     fn drop(&mut self) {
         self.kill();
+        // This should usually not go wrong
         if let Some(thread) = self.err_thread.take() {
             thread.join().unwrap_or_else(|err| {
                 println!("Err: while quitting {:?}", err);
@@ -166,6 +192,9 @@ impl Drop for ThreadPool {
 }
 
 impl Worker {
+    /// Function to create a new Worker and return the handle to the worker's
+    /// thread. This function cannot be used outside the threadpool as there
+    /// is no point in having an individual worker outside the thread pool
     fn new(
         id: usize,
         recv: Arc<Mutex<mpsc::Receiver<Message>>>,
@@ -180,6 +209,8 @@ impl Worker {
                         recv.lock().unwrap().try_recv().unwrap_or_else(|_| {
                             Message::Nothing(String::from("Nothing"))
                         });
+                    // Check if the worker got a job, which would be more
+                    // important to do than to check if it has to die
                     match msg {
                         Message::NewMessage(job) => {
                             if is_debug {
@@ -193,6 +224,7 @@ impl Worker {
                         }
                         _ => {}
                     }
+
                     let err =
                         err_recv.lock().unwrap().try_recv().unwrap_or_else(
                             |_| ErrorType::Nothing(String::from("Nothing")),

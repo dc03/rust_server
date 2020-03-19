@@ -1,4 +1,0 @@
-GET / files/hello.html
-GET /hello.html files/hello.html
-GET /styles.css styles/styles.css
-404 none files/404.html
